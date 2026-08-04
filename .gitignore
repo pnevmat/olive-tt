@@ -69,6 +69,7 @@ web_modules/
 .env
 .env.*
 !.env.example
+temp_auto_push.bat
 
 # parcel-bundler cache (https://parceljs.org/)
 .cache
@@ -123,7 +124,6 @@ dist
 .tern-port
 
 # Stores VSCode versions used for testing VSCode extensions
-.vscode-test
 
 # pnpm
 .pnpm-store
@@ -141,3 +141,5 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+.gitignore
+branch_structure.json
