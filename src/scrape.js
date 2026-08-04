@@ -166,23 +166,6 @@ const start = async (TARGET_URL) => {
 
 const getProductId = async (page, url) => {
   try {
-    const idFromData = await page.evaluate(() => {
-      return (
-        window?.productData?.id ||
-        window?.dataLayer?.[0]?.ecommerce?.detail?.products?.[0]?.id ||
-        null
-      );
-    });
-
-    if (idFromData) return String(idFromData);
-
-    const urlMatch =
-      url.match(
-        /(?:products?|items?|goods|details?|[\/][p][\/])\/([a-zA-Z0-9_-]+)/i,
-      ) || url.match(/(?:\?|&)id=([a-zA-Z0-9_-]+)/i);
-
-    if (urlMatch && urlMatch[1]) return urlMatch[1];
-
     const idFromHtml = await page.evaluate(() => {
       const metaId = document
         .querySelector('meta[property="product:id"]')
@@ -198,7 +181,6 @@ const getProductId = async (page, url) => {
 
       return metaId || dataId || inputId || skuId || null;
     });
-    console.log('Id from html: ', idFromHtml);
 
     if (idFromHtml) return String(idFromHtml);
 
@@ -253,37 +235,6 @@ const getProductTitle = async (page, url) => {
       }
     }
 
-    // Якщо ідеального співпадіння тегів не було знайдено, робить другу ітерацію:
-    // Шукає часткове співпадіння (наприклад: якщо в заголовку написано "MSI MAG Z890 TOMAHAWK WIFI Motherboard")
-    for (let i = 0; i < count; i++) {
-      const text = await candidatesLocator.nth(i).textContent();
-      if (!text) continue;
-
-      const normalizedText = text.toLowerCase().replace(/[^a-z0-9]/g, '');
-
-      // Виключає загальні слогани та сміття, перевіряє щільне входження
-      if (
-        normalizedText.includes(normalizedUrlSlug) &&
-        !normalizedText.includes('uniteasone')
-      ) {
-        return text.trim();
-      }
-    }
-
-    // Фолбек: якщо DOM повністю переписаний, витягає чистий заголовок з мета-тегів
-    const metaTitle = await page.evaluate(() => {
-      return (
-        document
-          .querySelector('meta[property="og:title"]')
-          ?.getAttribute('content') ||
-        document.querySelector('meta[name="title"]')?.getAttribute('content')
-      );
-    });
-
-    if (metaTitle && metaTitle.trim()) {
-      return metaTitle.split(/[|•-]/)[0].trim();
-    }
-
     return null;
   } catch (e) {
     console.error(`[Error] getProductTitle failed: ${e.message}`);
@@ -294,50 +245,6 @@ const getProductTitle = async (page, url) => {
 const getBrandFromSiteMeta = async (page) => {
   try {
     const brandData = await page.evaluate(() => {
-      const findBrand = (obj) => {
-        if (!obj || typeof obj !== 'object') return null;
-        if (obj.brand) {
-          if (typeof obj.brand === 'string') return obj.brand;
-          if (obj.brand.name) return obj.brand.name;
-        }
-        if (obj['@graph'] && Array.isArray(obj['@graph'])) {
-          for (const item of obj['@graph']) {
-            const res = findBrand(item);
-            if (res) return res;
-          }
-        }
-        return null;
-      };
-
-      // Най надійніше джерело для E-commerce — JSON-LD розмітка (Structured Data)
-      // Великі магазини завжди використовують Schema.org, де бренд прописаний явно.
-      const jsonLdScripts = document.querySelectorAll(
-        'script[type="application/ld+json"]',
-      );
-      for (const script of jsonLdScripts) {
-        try {
-          const json = JSON.parse(script.textContent || '{}');
-          // Шукає в середині @graph або в корні об'єкта Product
-          const brandName = findBrand(json);
-          if (brandName) return brandName.trim();
-        } catch (e) {
-          // Ігнорує помилки парсингу "битого" JSON на сторінці
-        }
-      }
-
-      // Шувкає за спеціальним мета-тегом product:brand
-      const productBrand =
-        document.querySelector('meta[name="product:brand"]') ||
-        document.querySelector('meta[property="product:brand"]');
-      if (productBrand?.getAttribute('content')) {
-        return productBrand.getAttribute('content').trim();
-      }
-
-      const siteName = document
-        .querySelector('meta[property="og:site_name"]')
-        ?.getAttribute('content');
-      if (siteName) return siteName.trim();
-
       // Аналіз document.title
       const pageTitle = document.title;
       if (pageTitle) {
@@ -523,17 +430,6 @@ const getProductDescription = async (page) => {
           .trim();
       };
 
-      // Допоміжна функція для рекурсивного пошуку ключа "description" в об'єкті Schema.org
-      const findDesc = (obj) => {
-        if (!obj || typeof obj !== 'object') return null;
-        if (obj.description) return obj.description;
-        for (const key in obj) {
-          const result = findDesc(obj[key]);
-          if (result) return result;
-        }
-        return null;
-      };
-
       // Шукає за розповсюдженими CSS-селекторами e-commerce платформ
       const selectors = [
         '#description-list',
@@ -565,45 +461,6 @@ const getProductDescription = async (page) => {
         }
       }
 
-      // Шукає в мікро розмітці JSON-LD (Найчистіший опис без розмітки)
-      const scripts = document.querySelectorAll(
-        'script[type="application/ld+json"]',
-      );
-
-      for (const script of scripts) {
-        try {
-          const json = JSON.parse(script.textContent);
-          const desc = findDesc(json);
-
-          if (desc) return {text: cleanText(desc), source: 'json-ld'};
-        } catch (e) {}
-      }
-
-      // Шукає SEO (itemprop) за стандартним семантичним атрибутом
-      const itempropDesc = document.querySelector('[itemprop="description"]');
-      if (itempropDesc) {
-        // Якщо це мета-тег, бере content, якщо блок — innerText
-        const text =
-          itempropDesc.tagName === 'META'
-            ? itempropDesc.getAttribute('content')
-            : itempropDesc.innerText;
-
-        if (text?.trim()) return {text: cleanText(text), source: 'itemprop'};
-      }
-
-      // Шукає в мета-тегах сторінки (Open Graph / SEO-summary)
-      const metaDesc =
-        document
-          .querySelector('meta[property="og:description"]')
-          ?.getAttribute('content') ||
-        document
-          .querySelector('meta[name="description"]')
-          ?.getAttribute('content');
-
-      if (metaDesc && metaDesc.trim()) {
-        return {text: cleanText(metaDesc), source: 'meta'};
-      }
-
       return null;
     });
 
@@ -616,39 +473,6 @@ const getProductDescription = async (page) => {
 const getRegularPrice = async (page) => {
   try {
     const rawPriceText = await page.evaluate(() => {
-      // Обробляє findPrice в середині evaluate, щоб браузер її бачив
-      const findPrice = (obj) => {
-        if (!obj || typeof obj !== 'object') return null;
-        // В JSON-LD регулярна ціна за наявності знижок часто записується як highPrice
-        if (obj.highPrice) return obj.highPrice;
-        if (obj.price && !obj.priceType) return obj.price;
-
-        for (const key in obj) {
-          const result = findPrice(obj[key]);
-          if (result) return result;
-        }
-        return null;
-      };
-
-      // Шукає ціну в мікро розмітці JSON-LD
-      const scripts = document.querySelectorAll(
-        'script[type="application/ld+json"]',
-      );
-
-      for (const script of scripts) {
-        try {
-          const json = JSON.parse(script.textContent);
-          const price = findPrice(json);
-          if (price) return String(price);
-        } catch (e) {}
-      }
-
-      // Шукає за стандартним семантичним атрибутом itemprop="price"
-      const itempropPrice = document.querySelector('[itemprop="price"]');
-      if (itempropPrice) {
-        return itempropPrice.getAttribute('content') || itempropPrice.innerText;
-      }
-
       // Шукає за спцифічними CSS-класами регулярної ціни (ігнорує ціни знижки)
       const selectors = [
         '#prices-old',
@@ -703,20 +527,6 @@ const getSalePrice = async (page) => {
   try {
     // Забирає текст ціни зі знижкою з HTML або JSON-LD
     const rawSalePriceText = await page.evaluate(() => {
-      // Перевіряє мікро розмітку JSON-LD. Якщо на сайті є знижка, в блоці Offers часто присутні поля price та priceValidUntil
-      const scripts = document.querySelectorAll(
-        'script[type="application/ld+json"]',
-      );
-
-      for (const script of scripts) {
-        try {
-          const json = JSON.parse(script.textContent);
-          const salePrice = findSalePrice(json);
-
-          if (salePrice) return String(salePrice);
-        } catch (e) {}
-      }
-
       // Шукає за специфічними CSS-селекторами ціни знижки/акційної ціни
       const saleSelectors = [
         '.product-card__price--sale',
@@ -773,40 +583,6 @@ const getProductAvailability = async (page) => {
   try {
     // Виконує код в середині контексту браузера для анализа DOM та JSON-LD
     const status = await page.evaluate(() => {
-      // Допоміжна функція - шукає наявні співпадіння в мікро розмітці
-      const findAvailability = (obj) => {
-        if (!obj || typeof obj !== 'object') return null;
-        if (obj.availability && typeof obj.availability === 'string')
-          return obj.availability;
-        if (obj.offers) {
-          if (Array.isArray(obj.offers) && obj.offers[0]?.availability)
-            return obj.offers[0].availability;
-          if (obj.offers.availability) return obj.offers.availability;
-        }
-        for (const key in obj) {
-          const result = findAvailability(obj[key]);
-          if (result) return result;
-        }
-        return null;
-      };
-
-      // Перевірка мікро розмітки JSON-LD (Най надійніший спосіб)
-      const scripts = document.querySelectorAll(
-        'script[type="application/ld+json"]',
-      );
-      for (const script of scripts) {
-        try {
-          const json = JSON.parse(script.textContent);
-          const availabilityUrl = findAvailability(json);
-
-          if (availabilityUrl) {
-            if (availabilityUrl.includes('InStock')) return 'in_stock';
-            if (availabilityUrl.includes('OutOfStock')) return 'out_of_stock';
-            if (availabilityUrl.includes('PreOrder')) return 'pre_order';
-          }
-        } catch (e) {}
-      }
-
       // Перевірка стану головної кнопки дії (CTA)
       const ctaButton = document.querySelector(
         '#product-addtocart-button, .product-card__button, .add-to-cart, #add-to-cart, .btn-buy, .action.tocart',
@@ -829,37 +605,6 @@ const getProductAvailability = async (page) => {
         }
       }
 
-      // Пошук за текстовими маркерами та CSS-класами на сторінці
-      const selectors = [
-        '.stock.available',
-        '.stock.unavailable',
-        '.product-stock-status',
-        '.stock',
-        '.availability',
-        '.product-card__badge',
-        '.instock',
-      ];
-
-      for (const selector of selectors) {
-        const element = document.querySelector(selector);
-        if (element) {
-          const text = element.innerText.toLowerCase();
-
-          if (text.includes('in stock') || text.includes('available'))
-            return 'in_stock';
-
-          if (
-            text.includes('out of stock') ||
-            text.includes('out') ||
-            text.includes('unavailable')
-          )
-            return 'out_of_stock';
-
-          if (text.includes('pre-order') || text.includes('preorder'))
-            return 'pre_order';
-        }
-      }
-
       // Контекстна підстановка: якщо кнопка купівлі активна і явних маркерів відсутності немає, вважається, що товар у наявності
       if (
         ctaButton &&
@@ -876,7 +621,9 @@ const getProductAvailability = async (page) => {
       for (const span of allSpans) {
         const text = span.innerText.toLowerCase();
 
-        if (text.includes('in stock')) return 'in_stock';
+        if (text.includes('in stock')) {
+          return 'in_stock';
+        }
         if (
           text.includes('out of stock') ||
           text.includes('out') ||
@@ -905,57 +652,6 @@ const getMainProductImage = async (page) => {
   try {
     // Отримує сире посилання на картинку з різних джерел в середині DOM
     const rawImageSrc = await page.evaluate(() => {
-      const findImage = (obj) => {
-        if (!obj || typeof obj !== 'object') return null;
-        // За специфікацією Schema.org, поле може називатись image або primaryImageOfPage
-        if (obj.image) {
-          if (typeof obj.image === 'string') return obj.image;
-          if (Array.isArray(obj.image) && obj.image[0]) return obj.image[0];
-          if (typeof obj.image === 'object' && obj.image.url)
-            return obj.image.url;
-        }
-
-        for (const key in obj) {
-          const result = findImage(obj[key]);
-          if (result) return result;
-        }
-
-        return null;
-      };
-      // Шукає в мікро розмітці JSON-LD (най надійніше джерело оригіналу)
-      const scripts = document.querySelectorAll(
-        'script[type="application/ld+json"]',
-      );
-
-      for (const script of scripts) {
-        try {
-          const json = JSON.parse(script.textContent);
-          const imgUrl = findImage(json);
-
-          if (imgUrl) return imgUrl;
-        } catch (e) {}
-      }
-
-      // Шукає за стандартним семантичним атрибутом itemprop="image"
-      const itempropImg = document.querySelector(
-        '[itemprop="image"], img[itemprop="image"]',
-      );
-
-      if (itempropImg) {
-        return (
-          itempropImg.getAttribute('src') ||
-          itempropImg.getAttribute('data-src') ||
-          itempropImg.getAttribute('content')
-        );
-      }
-
-      // Шукає в мета-тегах Open Graph (Тег, який формує перші посилання для соц мереж)
-      const ogImg = document
-        .querySelector('meta[property="og:image"]')
-        ?.getAttribute('content');
-
-      if (ogImg && ogImg.trim()) return ogImg.trim();
-
       // Шукає за розповсюдженими селекторами галерей e-commerce платформ
       const gallerySelectors = [
         '#main-product-image',
@@ -979,22 +675,6 @@ const getMainProductImage = async (page) => {
         }
       }
 
-      // Якщо специфічних блоків немає, бере першу велику картинку в тегу <main>
-      const mainContent = document.querySelector('main');
-
-      if (mainContent) {
-        const allImages = Array.from(mainContent.querySelectorAll('img'));
-        // Відфільтровує занадто маленькі картинки (іконки, стрілки)
-        const productImg = allImages.find((img) => {
-          const width =
-            img.naturalWidth || parseInt(img.getAttribute('width') || '0', 10);
-
-          return width > 150 || !img.src.includes('icon');
-        });
-
-        if (productImg) return productImg.src;
-      }
-
       return null;
     });
 
@@ -1016,36 +696,7 @@ const getAdditionalImages = async (page) => {
     const mainImageUrl = await getMainProductImage(page);
     // Збирає всі посилання на зображення галереї з DOM та JSON-LD
     const rawImages = await page.evaluate(() => {
-      const searchImages = (obj) => {
-        if (!obj || typeof obj !== 'object') return;
-        if (obj.image) {
-          if (Array.isArray(obj.image)) {
-            obj.image.forEach((img) =>
-              foundSrcs.push(typeof img === 'object' ? img.url : img),
-            );
-          } else if (typeof obj.image === 'object' && obj.image.url) {
-            foundSrcs.push(obj.image.url);
-          }
-        }
-
-        for (const key in obj) {
-          searchImages(obj[key]);
-        }
-      };
-
       const foundSrcs = [];
-
-      // Шукає в мікро розмітці JSON-LD (Якщо картинок декілька, вони йдуть масивом в поле image)
-      const scripts = document.querySelectorAll(
-        'script[type="application/ld+json"]',
-      );
-
-      for (const script of scripts) {
-        try {
-          const json = JSON.parse(script.textContent);
-          searchImages(json);
-        } catch (e) {}
-      }
 
       // Шукає за стандартними CSS-селекторами галерей/мініатюр (Thumbnails)
       const thumbSelectors = [
@@ -1069,20 +720,6 @@ const getAdditionalImages = async (page) => {
           if (src) foundSrcs.push(src);
         });
       });
-
-      // Якщо спеціальних класів немає, шукає будь які картинки в середині контейнера галереї
-      const galleryWrapper = document.querySelector(
-        '.product-images, .gallery, #product-gallery, .product-media',
-      );
-
-      if (galleryWrapper) {
-        const imgs = galleryWrapper.querySelectorAll('img');
-
-        imgs.forEach((img) => {
-          const src = img.getAttribute('data-src') || img.src;
-          if (src) foundSrcs.push(src);
-        });
-      }
 
       return foundSrcs;
     });
@@ -1190,49 +827,6 @@ const getTechnicalSpecifications = async (page) => {
         });
       });
 
-      // Збір зі списків описів (<dl>, <dt>, <dd>) ---
-      const dlLists = document.querySelectorAll('dl');
-
-      dlLists.forEach((dl) => {
-        const dts = dl.querySelectorAll('dt');
-
-        dts.forEach((dt) => {
-          const dd = dt.nextElementSibling;
-
-          if (dd && dd.tagName === 'DD') {
-            const key = cleanStr(dt.innerText);
-            const value = cleanStr(dd.innerText);
-
-            if (key && value) result.push(`${key}:${value}`);
-          }
-        });
-      });
-
-      // Збір з маркованих списків (<ul> / <li>) з розділювачем "двокрапка"
-      const specLists = document.querySelectorAll(
-        '.specs-list, .attributes, .product-features, main ul',
-      );
-
-      specLists.forEach((list) => {
-        const items = list.querySelectorAll('li');
-
-        items.forEach((item) => {
-          const text = item.innerText || item.textContent;
-          // Перевіряє чи є в рядку двокрапка, що розділює ключ та значення
-          if (text && text.includes(':')) {
-            const parts = text.split(':');
-            const key = cleanStr(parts[0]);
-            // З'єднує частини що залишились на випадок, якщо в значенні теж були двокрапки (наприклад: в таймстампі)
-            const value = cleanStr(parts.slice(1).join(':'));
-
-            if (key && value && key.length < 50) {
-              // Обмеження довжини ключа, щоб не захопити цілий абзац тексту
-              result.push(`${key}:${value}`);
-            }
-          }
-        });
-      });
-
       return Object.keys(result).length > 0 ? result : null;
     });
 
@@ -1303,6 +897,7 @@ const getStarRating = async (page) => {
         if (element?.innerText?.trim()) {
           const text = element.innerText.trim();
           // Страховка від текстів типу "Оцінка: 4.8" чи "4.8 з 5"
+
           if (
             /^[1-5]([.,]\d+)?$/.test(text) ||
             text.match(/([1-5](?:[.,]\d+)?)/)
@@ -1324,7 +919,6 @@ const getStarRating = async (page) => {
           const percentage = parseFloat(match[1]);
           if (widthStyle.includes('%') && percentage <= 100) {
             const calculated = String((percentage * 5) / 100);
-            console.log('Рейтинг рассчитан из ширины %:', calculated);
             return calculated;
           }
         }
@@ -1610,53 +1204,8 @@ const getMpn = async (page) => {
 
         return null;
       };
-      // Шукає в глобальних об'єктах даних (Page Data / Window) ===
-      const idFromWindow =
-        window?.productData?.mpn || window?.productData?.partNumber || null;
 
-      if (idFromWindow) return String(idFromWindow);
-
-      // Шукає в мікро розмітці JSON-LD (Schema.org / Product)
-      const scripts = document.querySelectorAll(
-        'script[type="application/ld+json"]',
-      );
-
-      for (const script of scripts) {
-        try {
-          const json = JSON.parse(script.textContent);
-          const mpnValue = findMpnField(json);
-
-          if (mpnValue) return String(mpnValue);
-        } catch (e) {}
-      }
-
-      // Шукає по семантичним атрибутам itemprop
-      const itempropMpn = document.querySelector(
-        '[itemprop="mpn"], [itemprop="partNumber"]',
-      );
-
-      if (itempropMpn) {
-        return itempropMpn.getAttribute('content') || itempropMpn.innerText;
-      }
-
-      // Шукає за розповсюдженими CSS-селекторами інтернет-магазинів
-      const cssSelectors = [
-        '.product-mpn',
-        '.part-number',
-        '.manufacturer-part-number',
-        '[data-mpn]',
-        '.sku-number',
-        '.product-meta__sku',
-      ];
-
-      for (const selector of cssSelectors) {
-        const element = document.querySelector(selector);
-
-        if (element) {
-          return element.getAttribute('data-mpn') || element.innerText;
-        }
-      }
-
+      // Шукає в таблицях
       const rows = document.querySelectorAll('tr, li, p');
 
       // Словник синонімів MPN на різних мовах
@@ -1676,7 +1225,6 @@ const getMpn = async (page) => {
               ''
             ).trim();
             if (mpnRegex.test(keyText)) {
-              console.log(`MPN найден в таблице по ключу "${keyText.trim()}":`);
               return (cells[1].innerText || cells[1].textContent || '').trim();
             }
           }
@@ -1760,7 +1308,6 @@ const pageScraper = async (start, getProductData, writeProductData) => {
   try {
     const {page, browser} = await start(TARGET_URL);
     const productData = await getProductData(page, page.url());
-    console.log('PgeScraper productData: ', productData);
 
     if (productData) writeProductData(productData);
 
