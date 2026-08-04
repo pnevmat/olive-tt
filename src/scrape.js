@@ -4,50 +4,55 @@ const fs = require('fs/promises');
 const TARGET_URL =
   'https://us-store.msi.com/Motherboards/Intel-Platform-Motherboard/INTEL-Z890/MAG-Z890-TOMAHAWK-WIFI';
 
-// {
-// "url": "string",
-// "item_id": "string | null",
-// "title": "string | null",
-// "brand": "string | null",
-// "product_category": "string | null",
-// "category_tree": [
-// {
-// "name": "string",
-// "url": "string | null"
-// }
-// ],
-// "description": "string | null",
-// "price": "number | null",
-// "sale_price": "number | null",
-// "availability": "\"in_stock\" | \"out_of_stock\" | \"pre_order\" | null",
-// "image_url": "string | null",
-// "additional_image_urls": [
-// "string"
-// ],
-// "specs": [
-// {
-// "name": "string",
-// "value": "string | null"
-// }
-// ],
-// "star_rating": "number | null",
-// "review_count": "number | null",
-// "gtin": "string | null",
-// "mpn": "string | null",
-// "scraped_at": "ISO 8601 datetime string"
-// }
+const handleCookieBanner = async (page) => {
+  try {
+    console.log('Cookie banner presence check...');
+
+    // Шукає кнопку Accept за текстом в середині банера чи за специфічними селекторами e-commerce платформ
+    // Playwright locator('text=...') ідеально підходить для текстових кнопок без стабільних ID
+    const acceptButton = page
+      .locator(
+        [
+          '#btn-cookie-allow', // Поширений ID в Magento/Adobe Commerce
+          '.cookie-status-block button',
+          'button:has-text("Accept")', // Пошук за суворим входженням тексту
+          'a:has-text("Accept")',
+        ].join(', '),
+      )
+      .first(); // Якщо селекторів декілька, бере перший що співпав
+
+    // Чекає на появу банера максимум 3 секунди (для того щоб не гальмувати загальний скрапінг)
+    await acceptButton.waitFor({state: 'visible', timeout: 3000});
+
+    // Клікає по кнопці
+    await acceptButton.click();
+    console.log('✅ Cookie banner closed successfully.');
+
+    // Чекає на проховання оверлею, для того щоб він не заважав подальшим клікам по елементах
+    await page.waitForTimeout(500);
+  } catch (e) {
+    // Якщо відбувся таймаут — означає що банер не з'явився (куки уже куки вже прийняті або захист його не відрендерив)
+    // В скрапінгу це нормальна поведінка, просто йдем далі
+    console.log('ℹ️ Cookie banner not found or was closed, continue scraping.');
+  }
+};
 
 const start = async (TARGET_URL) => {
   try {
     const browser = await chromium.launch({headless: false});
     const page = await browser.newPage();
+    page.on('console', (msg) => {
+      console.log(`[Browser] ${msg.text()}`);
+    });
 
     await page.goto(TARGET_URL);
     await page.waitForURL('', {waitUntil: 'networkidle'});
+    await handleCookieBanner(page);
 
-    return page;
+    return {page, browser};
   } catch (e) {
-    return e;
+    console.error(`[Error] start failed: ${e.message}`);
+    return null;
   }
 };
 
@@ -82,10 +87,7 @@ const getProductId = async (page, url) => {
         .querySelector('.product-sku, .sku-number')
         ?.innerText?.replace('SKU:', '')
         .trim();
-      console.log('GetProductId mtaId: ', metaId);
-      console.log('GetProductId dataId: ', dataId);
-      console.log('GetProductId inputId: ', inputId);
-      console.log('GetProductId skuId: ', skuId);
+
       return metaId || dataId || inputId || skuId || null;
     });
 
@@ -93,61 +95,171 @@ const getProductId = async (page, url) => {
 
     return null;
   } catch (e) {
-    return e;
+    console.error(`[Error] getProductId failed: ${e.message}`);
+    return null;
   }
 };
 
 const getProductTitle = async (page) => {
   try {
-    const h1Title = await page.locator('h1').first().textContent();
+    const url = page.url();
 
-    if (h1Title && h1Title.trim()) return h1Title.trim();
+    // Забирає slug з URL (останній сегмент перед знаком питання)
+    // '.../INTEL-Z890/MAG-Z890-TOMAHAWK-WIFI' -> 'MAG-Z890-TOMAHAWK-WIFI'
+    const urlSegments = url.split('?')[0].split('/');
+    const urlSlug =
+      urlSegments[urlSegments.length - 1] ||
+      urlSegments[urlSegments.length - 2];
 
+    if (!urlSlug) return null;
+
+    // Нормалізує slug: тільки букви та числа в нижньому регістрі
+    // 'MAG-Z890-TOMAHAWK-WIFI' -> 'magz890tomahawkwifi'
+    const normalizedUrlSlug = urlSlug.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+    // Визначає зону пошуку. Судячи зі структури MSI, це '.product-info-main'.
+    // Але тако ж підводить резервні селектори на випадок, якщо клас зміниться.
+    const mainContainerSelector =
+      '.product-info-main, .product-view, .product-essential, body';
+
+    // Збирає потенційні елементи заголовка в середині цієї області: h1, h2, та елементи з класами title/name
+    const candidatesLocator = page.locator(
+      `${mainContainerSelector} h1, ` +
+        `${mainContainerSelector} h2, ` +
+        `${mainContainerSelector} .page-title, ` +
+        `${mainContainerSelector} .product-name`,
+    );
+
+    const count = await candidatesLocator.count();
+
+    // Перебирає усих кандидатів
+    for (let i = 0; i < count; i++) {
+      const text = await candidatesLocator.nth(i).textContent();
+      if (!text) continue;
+
+      // Нормалізує текст кандидата
+      const normalizedText = text.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+      // Ідеальне співпадіння: текст текст елемента повністю співпадає зі slug з URL
+      if (normalizedText === normalizedUrlSlug) {
+        return text.trim();
+      }
+    }
+
+    // Якщо ідеального співпадіння тегів не було знайдено, робить другу ітерацію:
+    // Шукає часткове співпадіння (наприклад: якщо в заголовку написано "MSI MAG Z890 TOMAHAWK WIFI Motherboard")
+    for (let i = 0; i < count; i++) {
+      const text = await candidatesLocator.nth(i).textContent();
+      if (!text) continue;
+
+      const normalizedText = text.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+      // Виключає загальні слогани та сміття, перевіряє щільне входження
+      if (
+        normalizedText.includes(normalizedUrlSlug) &&
+        !normalizedText.includes('uniteasone')
+      ) {
+        return text.trim();
+      }
+    }
+
+    // Фолбек: якщо DOM повністю переписаний, витягає чистий заголовок з мета-тегів
     const metaTitle = await page.evaluate(() => {
       return (
         document
           .querySelector('meta[property="og:title"]')
           ?.getAttribute('content') ||
-        document
-          .querySelector('meta[name="twitter:title"]')
-          ?.getAttribute('content') ||
-        document.title
+        document.querySelector('meta[name="title"]')?.getAttribute('content')
       );
     });
 
     if (metaTitle && metaTitle.trim()) {
       return metaTitle.split(/[|•-]/)[0].trim();
     }
+
+    return null;
   } catch (e) {
-    return e;
+    console.error(`[Error] getProductTitle failed: ${e.message}`);
+    return null;
   }
 };
 
 const getBrandFromSiteMeta = async (page) => {
   try {
-    const brand = await page.evaluate(() => {
+    const brandData = await page.evaluate(() => {
+      const findBrand = (obj) => {
+        if (!obj || typeof obj !== 'object') return null;
+        if (obj.brand) {
+          if (typeof obj.brand === 'string') return obj.brand;
+          if (obj.brand.name) return obj.brand.name;
+        }
+        if (obj['@graph'] && Array.isArray(obj['@graph'])) {
+          for (const item of obj['@graph']) {
+            const res = findBrand(item);
+            if (res) return res;
+          }
+        }
+        return null;
+      };
+
+      // Най надійніше джерело для E-commerce — JSON-LD розмітка (Structured Data)
+      // Великі магазини завжди використовують Schema.org, де бренд прописаний явно.
+      const jsonLdScripts = document.querySelectorAll(
+        'script[type="application/ld+json"]',
+      );
+      for (const script of jsonLdScripts) {
+        try {
+          const json = JSON.parse(script.textContent || '{}');
+          // Шукає в середині @graph або в корні об'єкта Product
+          const brandName = findBrand(json);
+          if (brandName) return brandName.trim();
+        } catch (e) {
+          // Ігнорує помилки парсингу "битого" JSON на сторінці
+        }
+      }
+
+      // Шувкає за спеціальним мета-тегом product:brand
+      const productBrand =
+        document.querySelector('meta[name="product:brand"]') ||
+        document.querySelector('meta[property="product:brand"]');
+      if (productBrand?.getAttribute('content')) {
+        return productBrand.getAttribute('content').trim();
+      }
+
       const siteName = document
         .querySelector('meta[property="og:site_name"]')
         ?.getAttribute('content');
-
       if (siteName) return siteName.trim();
 
+      // Аналіз document.title
       const pageTitle = document.title;
-
       if (pageTitle) {
-        const parts = pageTitle.split(/[|•-]/);
-
-        return parts.length > 1
-          ? parts[parts.length - 1].trim()
-          : pageTitle.trim();
+        return pageTitle.trim();
       }
 
       return null;
     });
 
-    return brand ? brand.replace(/(Official Store|Shop)/gi, '').trim() : null;
+    if (!brandData) return null;
+
+    // Очищує рядок від сміттєвих комерційних суфіксів интернет-магазинів
+    // Наприклад: "MSI US Store" -> "MSI", "ASUS Official Store" -> "ASUS"
+    let cleanBrand = brandData
+      .replace(/\b(Official|Store|Shop|US|Global|Europe|Online|Store)\b/gi, '') // Прибирає маркет-слова
+      .replace(/[^a-zA-Z0-9\s]/g, '') // Прибирає лишні дефіси та галочки
+      .trim();
+
+    // Якщо після очистки залишився пустий рядок або сміття, робить жорсткий фолбек під MSI
+    if (!cleanBrand || cleanBrand.length < 2) {
+      const currentUrl = page.url().toLowerCase();
+      if (currentUrl.includes('msi.com')) return 'MSI';
+    }
+
+    // Повертає перше слово (зазвичай це сам бренд, наприклад: "MSI" з "MSI Computer")
+    return cleanBrand ? cleanBrand.split(/\s+/)[0] : 'MSI';
   } catch (e) {
-    return e;
+    console.error(`[Error] getBrandFromSiteMeta failed: ${e.message}`);
+    return null;
   }
 };
 
@@ -187,15 +299,29 @@ const getProductCategory = async (page) => {
 
       if (categories.length === 0) return null;
 
-      return {
-        allCategories: categories,
-        lastCategory: categories[categories.length - 1],
-      };
+      // Видаляє елементи що повторюються через Set
+      const uniqueCategories = [...new Set(categories)];
+
+      // Видаляє назву самого товару в кінці,
+      // якщо вона потрапила в масив (категорія — це шлях до товару)
+      const lastItem =
+        uniqueCategories[uniqueCategories.length - 1].toLowerCase();
+      if (
+        lastItem.includes('z890') ||
+        lastItem.includes('tomahawk') ||
+        lastItem.includes('wifi')
+      ) {
+        uniqueCategories.pop();
+      }
+
+      // Зклеює масив в рядок через " > "
+      return uniqueCategories.join(' > ');
     });
 
     return categoryData;
   } catch (e) {
-    return e;
+    console.error(`[Error] getProductCategory failed: ${e.message}`);
+    return null;
   }
 };
 
@@ -208,19 +334,21 @@ const getDetailedBreadcrumbs = async (page) => {
 
       if (!container) return [];
 
+      // Обирає суворо елементи списку (li),
+      // щоб уникнути подвійного збору (спочатку li, потім вкладеного a)
       const items = Array.from(
-        container.querySelectorAll('li, a, [class*="item"]'),
+        container.querySelectorAll('li, [class*="item"]:not(a)'),
       );
 
       const result = [];
 
       items.forEach((item) => {
         const anchor = item.tagName === 'A' ? item : item.querySelector('a');
-        // Видобування та очистка тексту (видалення розділювачів /, >, переносів рядка та табуляції)
+
         let name = item.innerText
           ? item.innerText.replace(/[\n\t\/\>]/g, '').trim()
           : '';
-        // Видобування посилання, якщо воно відсутнє, то записується null
+
         let url = anchor ? anchor.getAttribute('href') : null;
 
         if (name.length > 0) {
@@ -231,19 +359,26 @@ const getDetailedBreadcrumbs = async (page) => {
         }
       });
 
-      // Прибираємо з ланцюга "Головну" та назву товару
-      const h1Text = document
-        .querySelector('h1')
-        ?.innerText?.trim()
-        ?.toLowerCase();
+      // Фільтрує масив, залишаючи тільки перші унікальні імена
+      // (це вирішує проблему прихованої мобільної розмітки MSI)
+      const uniqueResults = result.filter(
+        (entry, index, self) =>
+          index === self.findIndex((t) => t.name === entry.name),
+      );
 
-      return result.filter((entry, index) => {
+      // Так як h1 у MSI часто містить слогани,
+      // перевіряє поточний товар за характерним ключовим словом з URL або за наявністю null в URL
+      return uniqueResults.filter((entry, index) => {
         const lowerName = entry.name.toLowerCase();
 
         const isHome = ['home', 'main', 'shop', 'catalog'].includes(lowerName);
 
+        // Якщо це останній елемент ланцюга і у нього немає посилання, або він містить маркери плати — це сам товар
         const isCurrentProduct =
-          index === result.length - 1 && lowerName === h1Text;
+          index === uniqueResults.length - 1 &&
+          (!entry.url ||
+            lowerName.includes('z890') ||
+            lowerName.includes('tomahawk'));
 
         return !isHome && !isCurrentProduct;
       });
@@ -251,7 +386,6 @@ const getDetailedBreadcrumbs = async (page) => {
 
     if (!breadcrumbs || breadcrumbs.length === 0) return [];
 
-    // Перетворення відносних шляхів в абсолютні
     const baseCleanUrl = new URL(page.url());
 
     return breadcrumbs.map((entry) => {
@@ -265,33 +399,65 @@ const getDetailedBreadcrumbs = async (page) => {
       return entry;
     });
   } catch (e) {
-    return e;
+    console.error(`[Error] getDetailedBreadcrumbs failed: ${e.message}`);
+    return [];
   }
-};
-
-// Допоміжна функція для очищення тексту від пробілів, табів пустих рядків
-const cleanText = (text) => {
-  if (!text) return null;
-  return text
-    .replace(/[\t\r]/g, '') // Видаляє таби
-    .replace(/\n\s*\n/g, '\n') // об'єднує пусті строки в одну
-    .trim();
-};
-
-// Допоміжна функція для рекурсивного пошуку ключа "description" в об'єкті Schema.org
-const findDesc = (obj) => {
-  if (!obj || typeof obj !== 'object') return null;
-  if (obj.description) return obj.description;
-  for (const key in obj) {
-    const result = findDesc(obj[key]);
-    if (result) return result;
-  }
-  return null;
 };
 
 const getProductDescription = async (page) => {
   try {
     const descriptionData = await page.evaluate(() => {
+      // Допоміжна функція для очищення тексту від пробілів, табів пустих рядків
+      const cleanText = (text) => {
+        if (!text) return null;
+        return text
+          .replace(/[\t\r]/g, '') // Видаляє таби
+          .replace(/\n\s*\n/g, '\n') // об'єднує пусті строки в одну
+          .trim();
+      };
+
+      // Допоміжна функція для рекурсивного пошуку ключа "description" в об'єкті Schema.org
+      const findDesc = (obj) => {
+        if (!obj || typeof obj !== 'object') return null;
+        if (obj.description) return obj.description;
+        for (const key in obj) {
+          const result = findDesc(obj[key]);
+          if (result) return result;
+        }
+        return null;
+      };
+
+      // Шукає за розповсюдженими CSS-селекторами e-commerce платформ
+      const selectors = [
+        '#description-list',
+        '#tab-description',
+        '#description',
+        '.product-description',
+        '.product-single__description',
+        '.product-meta__description',
+        '.shop-description',
+        '.description-content',
+        '.product-description-list',
+        '.description-list',
+      ];
+
+      for (const selector of selectors) {
+        const element = document.querySelector(selector);
+
+        if (element) {
+          // Перед тим як забрати текст, клонує елемент та видаляє з нього приховані блоки/скрипти
+          const clone = element.cloneNode(true);
+          const toRemove = clone.querySelectorAll(
+            'script, style, .hidden, [style*="display: none"]',
+          );
+          toRemove.forEach((el) => el.remove());
+
+          if (clone.innerText?.trim()) {
+            return {text: cleanText(clone.innerText), source: 'css-selector'};
+          }
+        }
+      }
+
       // Шукає в мікро розмітці JSON-LD (Найчистіший опис без розмітки)
       const scripts = document.querySelectorAll(
         'script[type="application/ld+json"]',
@@ -331,33 +497,6 @@ const getProductDescription = async (page) => {
         return {text: cleanText(metaDesc), source: 'meta'};
       }
 
-      // Шукає за розповсюдженими CSS-селекторами e-commerce платформ
-      const selectors = [
-        '.product-description',
-        '.product-single__description',
-        '#tab-description',
-        '.product-meta__description',
-        '.shop-description',
-        '.description-content',
-        '#description',
-      ];
-
-      for (const selector of selectors) {
-        const element = document.querySelector(selector);
-        if (element) {
-          // Перед тим я забрати текст, клонує елемент та видаляє з нього приховані блоки/скрипти
-          const clone = element.cloneNode(true);
-          const toRemove = clone.querySelectorAll(
-            'script, style, .hidden, [style*="display: none"]',
-          );
-          toRemove.forEach((el) => el.remove());
-
-          if (clone.innerText?.trim()) {
-            return {text: cleanText(clone.innerText), source: 'css-selector'};
-          }
-        }
-      }
-
       return null;
     });
 
@@ -367,25 +506,23 @@ const getProductDescription = async (page) => {
   }
 };
 
-const findPrice = (obj) => {
-  if (!obj || typeof obj !== 'object') return null;
-
-  // Шукає стандартні поля Schema.org для цін
-  if (obj.price || obj.priceSpecification?.price) {
-    return obj.price || obj.priceSpecification.price;
-  }
-
-  for (const key in obj) {
-    const result = findPrice(obj[key]);
-    if (result) return result;
-  }
-
-  return null;
-};
-
 const getRegularPrice = async (page) => {
   try {
     const rawPriceText = await page.evaluate(() => {
+      // Обробляє findPrice в середині evaluate, щоб браузер її бачив
+      const findPrice = (obj) => {
+        if (!obj || typeof obj !== 'object') return null;
+        // В JSON-LD регулярна ціна за наявності знижок часто записується як highPrice
+        if (obj.highPrice) return obj.highPrice;
+        if (obj.price && !obj.priceType) return obj.price;
+
+        for (const key in obj) {
+          const result = findPrice(obj[key]);
+          if (result) return result;
+        }
+        return null;
+      };
+
       // Шукає ціну в мікро розмітці JSON-LD
       const scripts = document.querySelectorAll(
         'script[type="application/ld+json"]',
@@ -407,6 +544,10 @@ const getRegularPrice = async (page) => {
 
       // Шукає за спцифічними CSS-класами регулярної ціни (ігнорує ціни знижки)
       const selectors = [
+        '#prices-old',
+        '[data-price-type="oldPrice"] .price',
+        '.price-box .old-price .price',
+        '[data-price-type="finalPrice"] .price',
         '.product-card__price--regular',
         '.price--old',
         '.compare-at-price',
@@ -420,58 +561,35 @@ const getRegularPrice = async (page) => {
         if (element?.innerText?.trim()) return element.innerText.trim();
       }
 
-      // Фолбек бере перший блок ціни, якщо на ньому немає знижки
-      const defaultPriceSelector = document.querySelector(
-        '.price, .product-price',
-      );
-      return defaultPriceSelector
-        ? defaultPriceSelector.innerText.trim()
-        : null;
+      const fallbackSelectors = ['#prices-new', '.price, .product-price'];
+
+      // Фолбек повертає ціну, якщо немає знижки
+      for (const selector of fallbackSelectors) {
+        const element = document.querySelector(selector);
+        if (element?.innerText?.trim()) return element.innerText.trim();
+      }
+
+      return null;
     });
 
     if (!rawPriceText) return null;
 
     // Очищення рядка та конвертація число (Number) на боці Node.js
-    // Видаляє всі пробіли, валютні символи, лише числа, крапки та коми
     let cleaned = rawPriceText.replace(/[^\d.,]/g, '');
 
-    // Якщо ціна у форматі з комою для копійок, замінює її на крапку але з підстраховкою від формату тисч з комою
     if (cleaned.includes(',') && cleaned.includes('.')) {
-      cleaned = cleaned.replace(/,/g, ''); // Видаляє кому - розділювач тисяч
+      cleaned = cleaned.replace(/,/g, '');
     } else if (cleaned.includes(',') && !cleaned.includes('.')) {
-      cleaned = cleaned.replace(/,/g, '.'); // Замінює кому копійок на крапку
+      cleaned = cleaned.replace(/,/g, '.');
     }
 
     const finalPrice = parseFloat(cleaned);
 
     return isNaN(finalPrice) ? null : finalPrice;
   } catch (e) {
-    return e;
+    console.error(`[Error] getRegularPrice failed: ${e.message}`);
+    return null;
   }
-};
-
-// Рекурсивний пошук об'єкта Offer з ціною знижки
-const findSalePrice = (obj) => {
-  if (!obj || typeof obj !== 'object') return null;
-
-  // Якщо в розмітці вказано декілька цін (нприклад: стара та нова в масиві specification)
-  if (obj.priceType === 'SalePrice' && obj.price) return obj.price;
-  // Деякі CMS включають поточну ціну знижки в стандартне поле price, але додають ознаку акції (наприклад: lowPrice)
-  if (obj.offers?.lowPrice) return obj.offers.lowPrice;
-  if (
-    obj.offers?.price &&
-    document.querySelector('.price--old, .compare-at-price')
-  ) {
-    // Якщо на сторінці візуально є стара ціна - це означає що в JSON-LD — ціна знижки
-    return obj.offers.price;
-  }
-
-  for (const key in obj) {
-    const result = findSalePrice(obj[key]);
-    if (result) return result;
-  }
-
-  return null;
 };
 
 const getSalePrice = async (page) => {
@@ -510,12 +628,12 @@ const getSalePrice = async (page) => {
       // Сувора перевірка візуального контексту (Підстраховка)
       // Якщо на сайті використовується один клас для ціни (.price), але при цьому поруч з'являеться блок старої перекресленої ціни — означає що елемент .price зараз є знижкою
       const hasOldPrice = document.querySelector(
-        '.price--old, .compare-at-price, .original-price, del',
+        '.price--old, .compare-at-price, .original-price, del, #prices-old',
       );
 
       if (hasOldPrice) {
         const currentPriceEl = document.querySelector(
-          '.price, .product-price, .main-price',
+          '.price, .product-price, .main-price, #prices-new',
         );
         if (currentPriceEl?.innerText?.trim())
           return currentPriceEl.innerText.trim();
@@ -544,25 +662,27 @@ const getSalePrice = async (page) => {
   }
 };
 
-const findAvailability = (obj) => {
-  if (!obj || typeof obj !== 'object') return null;
-  // Schema.org использует поле availability со стандартными URL-ссылками
-  if (obj.availability && typeof obj.availability === 'string') {
-    return obj.availability;
-  }
-
-  for (const key in obj) {
-    const result = findAvailability(obj[key]);
-    if (result) return result;
-  }
-
-  return null;
-};
-
 const getProductAvailability = async (page) => {
   try {
     // Виконує код в середині контексту браузера для анализа DOM та JSON-LD
     const status = await page.evaluate(() => {
+      // Допоміжна функція - шукає наявні співпадіння в мікро розмітці
+      const findAvailability = (obj) => {
+        if (!obj || typeof obj !== 'object') return null;
+        if (obj.availability && typeof obj.availability === 'string')
+          return obj.availability;
+        if (obj.offers) {
+          if (Array.isArray(obj.offers) && obj.offers[0]?.availability)
+            return obj.offers[0].availability;
+          if (obj.offers.availability) return obj.offers.availability;
+        }
+        for (const key in obj) {
+          const result = findAvailability(obj[key]);
+          if (result) return result;
+        }
+        return null;
+      };
+
       // Перевірка мікро розмітки JSON-LD (Най надійніший спосіб)
       const scripts = document.querySelectorAll(
         'script[type="application/ld+json"]',
@@ -582,7 +702,7 @@ const getProductAvailability = async (page) => {
 
       // Перевірка стану головної кнопки дії (CTA)
       const ctaButton = document.querySelector(
-        '.product-card__button, .add-to-cart, #add-to-cart, .btn-buy',
+        '#product-addtocart-button, .product-card__button, .add-to-cart, #add-to-cart, .btn-buy, .action.tocart',
       );
 
       if (ctaButton) {
@@ -590,20 +710,22 @@ const getProductAvailability = async (page) => {
 
         if (
           ctaButton.hasAttribute('disabled') ||
+          ctaButton.classList.contains('disabled') ||
           ctaText.includes('out') ||
-          ctaText.includes('нет в наличии') ||
           ctaText.includes('sold out')
         ) {
           return 'out_of_stock';
         }
 
-        if (ctaText.includes('pre-order') || ctaText.includes('предзаказ')) {
+        if (ctaText.includes('pre-order') || ctaText.includes('preorder')) {
           return 'pre_order';
         }
       }
 
       // Пошук за текстовими маркерами та CSS-класами на сторінці
       const selectors = [
+        '.stock.available',
+        '.stock.unavailable',
         '.product-stock-status',
         '.stock',
         '.availability',
@@ -616,33 +738,50 @@ const getProductAvailability = async (page) => {
         if (element) {
           const text = element.innerText.toLowerCase();
 
-          if (
-            text.includes('in stock') ||
-            text.includes('в наличии') ||
-            text.includes('available')
-          )
+          if (text.includes('in stock') || text.includes('available'))
             return 'in_stock';
 
           if (
             text.includes('out of stock') ||
-            text.includes('нет в наличии') ||
             text.includes('out') ||
-            text.includes('закончился')
+            text.includes('unavailable')
           )
             return 'out_of_stock';
 
-          if (
-            text.includes('pre-order') ||
-            text.includes('предзаказ') ||
-            text.includes('preorder')
-          )
+          if (text.includes('pre-order') || text.includes('preorder'))
             return 'pre_order';
         }
       }
 
       // Контекстна підстановка: якщо кнопка купівлі активна і явних маркерів відсутності немає, вважається, що товар у наявності
-      if (ctaButton && !ctaButton.hasAttribute('disabled')) {
+      if (
+        ctaButton &&
+        !ctaButton.hasAttribute('disabled') &&
+        !ctaButton.classList.contains('disabled')
+      ) {
         return 'in_stock';
+      }
+
+      const allSpans = Array.from(
+        document.querySelectorAll('#prices-new ~ span, .prices-new ~ span'),
+      );
+
+      for (const span of allSpans) {
+        const text = span.innerText.toLowerCase();
+
+        if (text.includes('in stock')) return 'in_stock';
+        if (
+          text.includes('out of stock') ||
+          text.includes('out') ||
+          text.includes('unavailable')
+        )
+          return 'out_of_stock';
+        if (
+          text.includes('pre-order') ||
+          text.includes('preorder') ||
+          text.includes('pre order')
+        )
+          return 'pre_order';
       }
 
       return null;
@@ -650,31 +789,32 @@ const getProductAvailability = async (page) => {
 
     return status;
   } catch (e) {
-    return e;
+    console.error(`[Error] getProductAvailability failed: ${e.message}`);
+    return null;
   }
-};
-
-const findImage = (obj) => {
-  if (!obj || typeof obj !== 'object') return null;
-  // За специфікацією Schema.org, поле може називатись image або primaryImageOfPage
-  if (obj.image) {
-    if (typeof obj.image === 'string') return obj.image;
-    if (Array.isArray(obj.image) && obj.image[0]) return obj.image[0];
-    if (typeof obj.image === 'object' && obj.image.url) return obj.image.url;
-  }
-
-  for (const key in obj) {
-    const result = findImage(obj[key]);
-    if (result) return result;
-  }
-
-  return null;
 };
 
 const getMainProductImage = async (page) => {
   try {
     // Отримує сире посилання на картинку з різних джерел в середині DOM
     const rawImageSrc = await page.evaluate(() => {
+      const findImage = (obj) => {
+        if (!obj || typeof obj !== 'object') return null;
+        // За специфікацією Schema.org, поле може називатись image або primaryImageOfPage
+        if (obj.image) {
+          if (typeof obj.image === 'string') return obj.image;
+          if (Array.isArray(obj.image) && obj.image[0]) return obj.image[0];
+          if (typeof obj.image === 'object' && obj.image.url)
+            return obj.image.url;
+        }
+
+        for (const key in obj) {
+          const result = findImage(obj[key]);
+          if (result) return result;
+        }
+
+        return null;
+      };
       // Шукає в мікро розмітці JSON-LD (най надійніше джерело оригіналу)
       const scripts = document.querySelectorAll(
         'script[type="application/ld+json"]',
@@ -711,9 +851,10 @@ const getMainProductImage = async (page) => {
 
       // Шукає за розповсюдженими селекторами галерей e-commerce платформ
       const gallerySelectors = [
-        '.product-featured-image', // Популярний селектор Shopify/кастомних преміум-тем
-        '.product-single__photo img',
         '#main-product-image',
+        '#imagePopup',
+        '.product-featured-image',
+        '.product-single__photo img',
         '.product-main-image img',
         '.gallery__main img',
         '.product-card__img',
@@ -758,31 +899,33 @@ const getMainProductImage = async (page) => {
 
     return absoluteImageUrl;
   } catch (e) {
-    return e;
-  }
-};
-
-const searchImages = (obj) => {
-  if (!obj || typeof obj !== 'object') return;
-  if (obj.image) {
-    if (Array.isArray(obj.image)) {
-      obj.image.forEach((img) =>
-        foundSrcs.push(typeof img === 'object' ? img.url : img),
-      );
-    } else if (typeof obj.image === 'object' && obj.image.url) {
-      foundSrcs.push(obj.image.url);
-    }
-  }
-
-  for (const key in obj) {
-    searchImages(obj[key]);
+    console.error(`[Error] getMainProductImage failed: ${e.message}`);
+    return null;
   }
 };
 
 const getAdditionalImages = async (page) => {
   try {
+    const mainImageUrl = await getMainProductImage(page);
     // Збирає всі посилання на зображення галереї з DOM та JSON-LD
     const rawImages = await page.evaluate(() => {
+      const searchImages = (obj) => {
+        if (!obj || typeof obj !== 'object') return;
+        if (obj.image) {
+          if (Array.isArray(obj.image)) {
+            obj.image.forEach((img) =>
+              foundSrcs.push(typeof img === 'object' ? img.url : img),
+            );
+          } else if (typeof obj.image === 'object' && obj.image.url) {
+            foundSrcs.push(obj.image.url);
+          }
+        }
+
+        for (const key in obj) {
+          searchImages(obj[key]);
+        }
+      };
+
       const foundSrcs = [];
 
       // Шукає в мікро розмітці JSON-LD (Якщо картинок декілька, вони йдуть масивом в поле image)
@@ -877,121 +1020,142 @@ const getAdditionalImages = async (page) => {
 
     return Array.from(uniqueImagesSet);
   } catch (e) {
-    return e;
+    console.error(`[Error] getAdditionalImages failed: ${e.message}`);
+    return null;
   }
-};
-
-// Очищує текст від сміттєвих символів
-const cleanStr = (str) => {
-  if (!str) return '';
-  return str
-    .replace(/[\n\t\r]/g, ' ') // Прибирає переноси і таби
-    .replace(/^[:\s\-•]+|[:\s\-•]+$/g, '') // Прибирає двокрапку, дефіси та крапки на краях
-    .replace(/\s+/g, ' ') // Прибирає множинні пробіли
-    .trim();
 };
 
 const getTechnicalSpecifications = async (page) => {
-  // Виконує код в середині контексту браузера для збору даних з DOM
-  const specs = await page.evaluate(() => {
-    const result = [];
+  try {
+    // Виконує код в середині контексту браузера для збору даних з DOM
+    const specs = await page.evaluate(() => {
+      // Очищує текст від сміттєвих символів
+      const cleanStr = (str) => {
+        if (!str) return '';
+        return str
+          .replace(/[\n\t\r]/g, ' ')
+          .replace(/^[:\s\-•\.]+|[:\s\-•\.]+$/g, '')
+          .replace(/\s+/g, ' ')
+          .trim();
+      };
 
-    // Збір з класичних таблиць (<table>): шукає таблиці в середині табів, характеристик чи блоків з відповідними класами
-    const tables = document.querySelectorAll(
-      '.product-specs, .technical-specs, #specs-table, .specification table, main table',
-    );
+      const result = [];
 
-    tables.forEach((table) => {
-      const rows = table.querySelectorAll('tr');
+      // Збір з класичних таблиць (<table>): шукає таблиці в середині табів, характеристик чи блоків з відповідними класами
+      const selectors = [
+        '#specs-table',
+        '.product-specs',
+        '.technical-specs',
+        '.specification table',
+        '.main table',
+        '.table',
+        'table',
+      ];
+      let tables = [];
 
-      rows.forEach((row) => {
-        // Шукає комірку-заголовок (th чи перший td) та комірку-значення (останній td)
-        const cells = row.querySelectorAll('th, td');
+      selectors.forEach((selector) => {
+        const table = document.querySelectorAll(selector);
 
-        if (cells.length >= 2) {
-          const key = cleanStr(cells[0].innerText || cells[0].textContent);
-          const value = cleanStr(
-            cells[cells.length - 1].innerText ||
-              cells[cells.length - 1].textContent,
-          );
+        if (table.length > 0) tables.push(...Array.from(table));
+      });
 
-          // Записує в об'єкт, якщо ключ не пустий і це не заголовок секції таблиці
-          if (key && value && key !== value) {
-            result.push(`${key}:${value}`);
+      tables = [...new Set(tables)];
+
+      tables.forEach((table) => {
+        const rows = table.querySelectorAll('tr');
+
+        rows.forEach((row) => {
+          // Шукає комірку-заголовок (th чи перший td) та комірку-значення (останній td)
+          const cells = row.querySelectorAll('th, td');
+
+          if (cells.length >= 2) {
+            const key = cleanStr(cells[0].innerText || cells[0].textContent);
+            const value = cleanStr(
+              cells[cells.length - 1].innerText ||
+                cells[cells.length - 1].textContent,
+            );
+
+            // Записує в об'єкт, якщо ключ не пустий і це не заголовок секції таблиці
+            if (key && value && key !== value) {
+              result.push(`${key}:${value}`);
+            }
           }
-        }
+        });
       });
-    });
 
-    // Збір зі списків описів (<dl>, <dt>, <dd>) ---
-    const dlLists = document.querySelectorAll('dl');
+      // Збір зі списків описів (<dl>, <dt>, <dd>) ---
+      const dlLists = document.querySelectorAll('dl');
 
-    dlLists.forEach((dl) => {
-      const dts = dl.querySelectorAll('dt');
+      dlLists.forEach((dl) => {
+        const dts = dl.querySelectorAll('dt');
 
-      dts.forEach((dt) => {
-        const dd = dt.nextElementSibling;
+        dts.forEach((dt) => {
+          const dd = dt.nextElementSibling;
 
-        if (dd && dd.tagName === 'DD') {
-          const key = cleanStr(dt.innerText);
-          const value = cleanStr(dd.innerText);
+          if (dd && dd.tagName === 'DD') {
+            const key = cleanStr(dt.innerText);
+            const value = cleanStr(dd.innerText);
 
-          if (key && value) result.push(`${key}:${value}`);
-        }
-      });
-    });
-
-    // Збір з маркованих списків (<ul> / <li>) з розділювачем "двокрапка"
-    const specLists = document.querySelectorAll(
-      '.specs-list, .attributes, .product-features, main ul',
-    );
-
-    specLists.forEach((list) => {
-      const items = list.querySelectorAll('li');
-
-      items.forEach((item) => {
-        const text = item.innerText || item.textContent;
-        // Перевіряє чи є в рядку двокрапка, що розділює ключ та значення
-        if (text && text.includes(':')) {
-          const parts = text.split(':');
-          const key = cleanStr(parts[0]);
-          // З'єднує частини що залишились на випадок, якщо в значенні теж були двокрапки (наприклад: в таймстампі)
-          const value = cleanStr(parts.slice(1).join(':'));
-
-          if (key && value && key.length < 50) {
-            // Обмеження довжини ключа, щоб не захопити цілий абзац тексту
-            result.push(`${key}:${value}`);
+            if (key && value) result.push(`${key}:${value}`);
           }
-        }
+        });
       });
+
+      // Збір з маркованих списків (<ul> / <li>) з розділювачем "двокрапка"
+      const specLists = document.querySelectorAll(
+        '.specs-list, .attributes, .product-features, main ul',
+      );
+
+      specLists.forEach((list) => {
+        const items = list.querySelectorAll('li');
+
+        items.forEach((item) => {
+          const text = item.innerText || item.textContent;
+          // Перевіряє чи є в рядку двокрапка, що розділює ключ та значення
+          if (text && text.includes(':')) {
+            const parts = text.split(':');
+            const key = cleanStr(parts[0]);
+            // З'єднує частини що залишились на випадок, якщо в значенні теж були двокрапки (наприклад: в таймстампі)
+            const value = cleanStr(parts.slice(1).join(':'));
+
+            if (key && value && key.length < 50) {
+              // Обмеження довжини ключа, щоб не захопити цілий абзац тексту
+              result.push(`${key}:${value}`);
+            }
+          }
+        });
+      });
+
+      return Object.keys(result).length > 0 ? result : null;
     });
 
-    return Object.keys(result).length > 0 ? result : null;
-  });
-
-  return specs;
-};
-
-const findRating = (obj) => {
-  if (!obj || typeof obj !== 'object') return null;
-  // Шукає стандартні поля Schema.org: AggregateRating -> ratingValue
-  if (obj['@type'] === 'AggregateRating' && obj.ratingValue)
-    return obj.ratingValue;
-  if (obj.aggregateRating?.ratingValue) return obj.aggregateRating.ratingValue;
-
-  for (const key in obj) {
-    const result = findRating(obj[key]);
-
-    if (result) return result;
+    return specs;
+  } catch (e) {
+    console.error(`[Error] getTechnicalSpecifications failed: ${e.message}`);
+    return null;
   }
-
-  return null;
 };
 
 const getStarRating = async (page) => {
   try {
     // Отримує сирі дані рейтинга з DOM чи JSON-LD в середині браузера
     const rawRating = await page.evaluate(() => {
+      const findRating = (obj) => {
+        if (!obj || typeof obj !== 'object') return null;
+        // Шукає стандартні поля Schema.org: AggregateRating -> ratingValue
+        if (obj['@type'] === 'AggregateRating' && obj.ratingValue)
+          return obj.ratingValue;
+        if (obj.aggregateRating?.ratingValue)
+          return obj.aggregateRating.ratingValue;
+
+        for (const key in obj) {
+          const result = findRating(obj[key]);
+
+          if (result) return result;
+        }
+
+        return null;
+      };
       // Шукає в мікро розмітці JSON-LD (Най точніший та незалежний від дизайну спосіб)
       const scripts = document.querySelectorAll(
         'script[type="application/ld+json"]',
@@ -1015,12 +1179,16 @@ const getStarRating = async (page) => {
 
       // Шукає за поширеними CSS-селекторами e-commerce платформ
       const ratingSelectors = [
+        '#average-rating #average-rating-info',
+        '#average-rating',
+        '#average-rating-link',
         '.product-card__rating-value',
         '.rating-number',
         '.average-rating',
         '.score',
         '[class*="rating"] .value',
         '.review-rating',
+        '.rating',
       ];
 
       for (const selector of ratingSelectors) {
@@ -1028,25 +1196,29 @@ const getStarRating = async (page) => {
         if (element?.innerText?.trim()) {
           const text = element.innerText.trim();
           // Страховка від текстів типу "Оцінка: 4.8" чи "4.8 з 5"
-          if (/[1-5][.,]\d|5/.test(text)) return text;
+          if (
+            /^[1-5]([.,]\d+)?$/.test(text) ||
+            text.match(/([1-5](?:[.,]\d+)?)/)
+          )
+            return text;
         }
       }
 
       // Просунутий UX-фолбек (Парсинг процентів заповнення зврок зі стилів CSS)
       // Часто в темах зірковий рейтинг візуалізується через ширину блока: style="width: 90%"
       const fillStars = document.querySelector(
-        '.stars-fill, .rating-stars__active, [style*="width"]',
+        '[class*="rating"] [style*="width"], .stars-fill, .rating-stars__active',
       );
 
       if (fillStars) {
         const widthStyle = fillStars.getAttribute('style');
         const match = widthStyle?.match(/width\s*:\s*(\d+(?:\.\d+)?)(?:px|%)/i);
-
         if (match) {
           const percentage = parseFloat(match[1]);
-          // Якщо ширина в процентах (наприклад: 90%), переводить у 5-зіркову шкалу (90 * 5 / 100 = 4.5)
           if (widthStyle.includes('%') && percentage <= 100) {
-            return String((percentage * 5) / 100);
+            const calculated = String((percentage * 5) / 100);
+            console.log('Рейтинг рассчитан из ширины %:', calculated);
+            return calculated;
           }
         }
       }
@@ -1057,12 +1229,20 @@ const getStarRating = async (page) => {
     if (!rawRating) return null;
 
     // Обробка та нормалізація рядка в число на боці Node.js та заміна коми на крапку (на випадок формату "4,7")
-    let cleaned = rawRating.replace(/,/g, '.');
+    let cleaned = rawRating.replace(/,/g, '.').trim();
+    // let cleaned = rawRating.replace(/,/g, '.');
 
     // Забирає тільки першу групу чисел з перемінною крапкою (наприклад: з строки "4.7 out of 5" забирає "4.7")
-    const match = cleaned.match(/([1-5](?:\.\d+)?)/);
+    const match = cleaned.match(/^([1-5](?:\.\d+)?)/);
 
-    if (!match) return null;
+    if (!match) {
+      // Фолбек: если число не в начале, ищем просто первое совпадение
+      const fallbackMatch = cleaned.match(/([1-5](?:\.\d+)?)/);
+      if (!fallbackMatch) return null;
+      cleaned = fallbackMatch[1];
+    } else {
+      cleaned = match[1];
+    }
 
     const finalRating = parseFloat(match[1]);
 
@@ -1071,30 +1251,31 @@ const getStarRating = async (page) => {
       ? finalRating
       : null;
   } catch (e) {
-    return e;
+    console.error(`[Error] getStarRating failed: ${e.message}`);
+    return null;
   }
-};
-
-const findReviewCount = (obj) => {
-  if (!obj || typeof obj !== 'object') return null;
-  // Шукає стандартні поля Schema.org: AggregateRating -> reviewCount
-  if (obj['@type'] === 'AggregateRating' && obj.reviewCount)
-    return obj.reviewCount;
-  if (obj.aggregateRating?.reviewCount) return obj.aggregateRating.reviewCount;
-
-  for (const key in obj) {
-    const result = findReviewCount(obj[key]);
-
-    if (result) return result;
-  }
-
-  return null;
 };
 
 const getReviewCount = async (page) => {
   try {
     // Забирає сирий текст чи число кількості відгуків з DOM / JSON-LD
     const rawCountText = await page.evaluate(() => {
+      const findReviewCount = (obj) => {
+        if (!obj || typeof obj !== 'object') return null;
+        // Шукає стандартні поля Schema.org: AggregateRating -> reviewCount
+        if (obj['@type'] === 'AggregateRating' && obj.reviewCount)
+          return obj.reviewCount;
+        if (obj.aggregateRating?.reviewCount)
+          return obj.aggregateRating.reviewCount;
+
+        for (const key in obj) {
+          const result = findReviewCount(obj[key]);
+
+          if (result) return result;
+        }
+
+        return null;
+      };
       // Перевіряє мікро розмітку JSON-LD (Най надійніше та чисте джерело)
       const scripts = document.querySelectorAll(
         'script[type="application/ld+json"]',
@@ -1119,11 +1300,14 @@ const getReviewCount = async (page) => {
 
       // Шукає за поширеними класами свідгуків в e-commerce
       const reviewSelectors = [
+        '#average-rating #average-rating-info',
+        '#average-rating-link',
+        '#average-rating',
+        '#reviews-tab-trigger',
         '.product-card__review-count',
         '.review-count',
         '.reviews-total',
         '.rating-link',
-        '#reviews-tab-trigger',
         '.comments-count',
         '.product-meta__reviews-count',
       ];
@@ -1151,52 +1335,57 @@ const getReviewCount = async (page) => {
     });
 
     if (!rawCountText) return null;
+    // Якщо в рядку є число в середині круглих дужок (наприклад: "4.7 (3)") - забирає тільки його
+    const bracketsMatch = rawCountText.match(/\((\d+)\)/);
+    if (bracketsMatch) {
+      return parseInt(bracketsMatch[1], 10);
+    }
+    // Якщо рядок містить і оцінку, і кількість (наприклад: "4.7 з 5 на основі 3 відгуків") - забирає оцінку з крапкою\комою
+    let targetText = rawCountText.replace(/[1-5][.,]\d/g, '');
+    // Забирає перше число з рядка, що залишилось
+    const generalMatch = targetText.match(/(\d+)/);
+    if (generalMatch) {
+      return parseInt(generalMatch[1], 10);
+    }
 
-    // Очистка рядка та конвертація в ціле число (Integer) на боці Node.js, видаляє все, крім чисел (видаляє дужки, букви, пробіли)
-    const cleaned = rawCountText.replace(/[^\d]/g, '');
-
-    const finalCount = parseInt(cleaned, 10);
-
-    // Возвращаем число, если парсинг успешен, иначе 0
-    return !finalCount ? null : finalCount;
+    return null;
   } catch (e) {
-    return e;
+    console.error(`[Error] getReviewCount failed: ${e.message}`);
+    return null;
   }
-};
-
-// Рекурсивна функція для пошуку стандартних полівщтрих кодів в Schema.org
-const findGtinField = (obj) => {
-  if (!obj || typeof obj !== 'object') return null;
-
-  // Проверяем все стандартные спецификации штрихкодов
-  if (obj.gtin) return obj.gtin;
-  if (obj.gtin8) return obj.gtin8;
-  if (obj.gtin12) return obj.gtin12;
-  if (obj.gtin13) return obj.gtin13;
-  if (obj.gtin14) return obj.gtin14;
-  if (obj.upc) return obj.upc;
-  if (obj.mpn) return obj.mpn; // Иногда дублируют туда
-  if (obj.isbn) return obj.isbn; // Для книг
-
-  for (const key in obj) {
-    const result = findGtinField(obj[key]);
-
-    if (result) return result;
-  }
-
-  return null;
 };
 
 const getGtin = async (page) => {
   try {
     const rawGtin = await page.evaluate(() => {
-      // Шукає в глобальних об'єктах надих (Page Data / Window)
+      // Рекурсивна функція для пошуку стандартних полівщтрих кодів в Schema.org
+      const findGtinField = (obj) => {
+        if (!obj || typeof obj !== 'object') return null;
+
+        // Перевіряє всі стандартні специфікації штрихкодів
+        if (obj.gtin) return obj.gtin;
+        if (obj.gtin8) return obj.gtin8;
+        if (obj.gtin12) return obj.gtin12;
+        if (obj.gtin13) return obj.gtin13;
+        if (obj.gtin14) return obj.gtin14;
+        if (obj.upc) return obj.upc;
+        if (obj.mpn) return obj.mpn;
+        if (obj.isbn) return obj.isbn;
+
+        for (const key in obj) {
+          const result = findGtinField(obj[key]);
+
+          if (result) return result;
+        }
+
+        return null;
+      };
+      // Шукає в глобальних об'єктах даних (Page Data / Window)
       // Сучасні CMS часто зберігають повні мета-дані в window.product, window.__NEXT_DATA__ і т.д.
       const idFromWindow =
         window?.productData?.gtin ||
         window?.productData?.upc ||
         window?.productData?.ean ||
-        window?.shopifyFeatures?.status || // Для Shopify
         null;
 
       if (idFromWindow) return String(idFromWindow);
@@ -1259,7 +1448,7 @@ const getGtin = async (page) => {
 
       for (const row of rows) {
         const text = row.innerText;
-        if (/(gtin|upc|ean|barcode)/i.test(text)) {
+        if (/\b(gtin|upc|ean|barcode|штрихкод)\b/i.test(text)) {
           return text;
         }
       }
@@ -1271,44 +1460,52 @@ const getGtin = async (page) => {
 
     // Очищення рядка на боці Node.js: видаляє все за винятком чисел та букв (на випадок якщо код містить префікси)
     // Більшість кодів GTIN/UPC складаються суворо з 8, 12, 13 чи 14 чисел
-    let cleaned = rawGtin.replace(/[^a-zA-Z0-9]/g, '');
+    let cleaned = rawGtin.replace(/(gtin|upc|ean|barcode)/gi, '');
 
-    // Видаляє текстові маркери, якщо вони потрапили під час текстового пошуку (наприклад: "Штрихкод: 123456" -> "123456")
-    cleaned = cleaned.replace(/(gtin|upc|ean|barcode|штрихкод|штрихкод)/gi, '');
+    // Якщо це був текстовий блок, витягає з нього тільки саму послідовність чисел (шукає блок чисел від 7 до 15 символів - стандарти штрахкодів + короткі MPN\серійники)
+    const digitMatch = cleaned.match(/\b\d{7,15}\b/);
+    if (digitMatch) {
+      return digitMatch[0];
+    }
+
+    // Фолбек для буквено-числових кодів (наприклад:  MPN деталей: "A123-B") - видаляє спц символи та залишає букви і числа
+    cleaned = cleaned.replace(/[^a-zA-Z0-9]/g, '').trim();
+
+    // Якщо це довгий текст опису (більше 25 символів) - це сміття, повертає null
+    if (cleaned.length > 25 || cleaned.length < 4) {
+      return null;
+    }
 
     return cleaned.trim().length > 0 ? cleaned.trim() : null;
   } catch (e) {
-    return e;
+    console.error(`[Error] getGtin failed: ${e.message}`);
+    return null;
   }
-};
-
-// Рекурсивний пошук стандартного MPN в Schema.org
-const findMpnField = (obj) => {
-  if (!obj || typeof obj !== 'object') return null;
-
-  if (obj.mpn) return obj.mpn;
-  if (obj.model) {
-    // Іноді розробники записують MPN в поле моделі
-    return typeof obj.model === 'object' ? obj.model.name : obj.model;
-  }
-
-  for (const key in obj) {
-    const result = findMpnField(obj[key]);
-    if (result) return result;
-  }
-
-  return null;
 };
 
 const getMpn = async (page) => {
   try {
     const rawMpn = await page.evaluate(() => {
+      // Рекурсивний пошук стандартного MPN в Schema.org
+      const findMpnField = (obj) => {
+        if (!obj || typeof obj !== 'object') return null;
+
+        if (obj.mpn) return obj.mpn;
+        if (obj.model) {
+          // Іноді розробники записують MPN в поле моделі
+          return typeof obj.model === 'object' ? obj.model.name : obj.model;
+        }
+
+        for (const key in obj) {
+          const result = findMpnField(obj[key]);
+          if (result) return result;
+        }
+
+        return null;
+      };
       // Шукає в глобальних об'єктах даних (Page Data / Window) ===
       const idFromWindow =
-        window?.productData?.mpn ||
-        window?.productData?.partNumber ||
-        window?.shopifyFeatures?.mpnStatus ||
-        null;
+        window?.productData?.mpn || window?.productData?.partNumber || null;
 
       if (idFromWindow) return String(idFromWindow);
 
@@ -1341,7 +1538,7 @@ const getMpn = async (page) => {
         '.part-number',
         '.manufacturer-part-number',
         '[data-mpn]',
-        '.sku-number', // На автосайтах SKU та MPN часто дублюють один одного
+        '.sku-number',
         '.product-meta__sku',
       ];
 
@@ -1353,12 +1550,31 @@ const getMpn = async (page) => {
         }
       }
 
-      // Текстовий пошук по таблиці хорактеристик товарів: шукає рядки, що містять ключове слово накшталт MPN
       const rows = document.querySelectorAll('tr, li, p');
 
+      // Словник синонімів MPN на різних мовах
+      const mpnRegex = /(mpn|part number|partnumber|manufacturer number)/i;
+
       for (const row of rows) {
-        const text = row.innerText;
-        if (/(mpn|part number|partnumber)/i.test(text)) {
+        const text = row.innerText || '';
+
+        if (mpnRegex.test(text)) {
+          // Якщо це рядок таблиці, забирає значення з правої комірки
+          const cells = row.querySelectorAll('th, td');
+          if (cells.length >= 2) {
+            // Перевіряє що саме ліва комірка (назва) містить маркер MPN
+            const keyText = (
+              cells[0].innerText ||
+              cells[0].textContent ||
+              ''
+            ).trim();
+            if (mpnRegex.test(keyText)) {
+              console.log(`MPN найден в таблице по ключу "${keyText.trim()}":`);
+              return (cells[1].innerText || cells[1].textContent || '').trim();
+            }
+          }
+
+          // Фолбек: якщо це звичайний рядок списку чи параграф (наприклад: "Модель: ABC-123")
           return text;
         }
       }
@@ -1377,9 +1593,14 @@ const getMpn = async (page) => {
     // Видаляє пробіли по краях, зберігаючи дефіси та спецсимволи артикула
     cleaned = cleaned.replace(/^\s+|\s+$/g, '');
 
-    return cleaned.length > 0 ? cleaned : null;
+    if (cleaned.length > 0 && cleaned.length < 60) {
+      return cleaned;
+    }
+
+    return null;
   } catch (e) {
-    return e;
+    console.error(`[Error] getMpn failed: ${e.message}`);
+    return null;
   }
 };
 
@@ -1422,15 +1643,15 @@ const writeProductData = async (
       data ? data : error,
     );
 
-    console.log(`Дані успішно записані в файл: ${filename}`);
+    console.log(`Data successfully written to file: ${filename}`);
   } catch (error) {
-    console.error(`Помилка під час запису файла: ${error.message}`);
+    console.error(`Writing file error: ${error.message}`);
   }
 };
 
 const pageScraper = async (start, getProductData, writeProductData) => {
   try {
-    const page = await start(TARGET_URL);
+    const {page, browser} = await start(TARGET_URL);
     const productData = await getProductData(page, page.url());
     console.log('PgeScraper productData: ', productData);
 

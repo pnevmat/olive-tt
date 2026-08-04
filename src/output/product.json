@@ -1,0 +1,71 @@
+{
+  "url": "https://us-store.msi.com/Motherboards/Intel-Platform-Motherboard/INTEL-Z890/MAG-Z890-TOMAHAWK-WIFI",
+  "item_id": "2373",
+  "title": "MAG Z890 TOMAHAWK WIFI",
+  "brand": "MSI",
+  "product_category": "Motherboards > INTEL PLATFORM > Intel Z890",
+  "category_tree": [
+    {
+      "name": "Motherboards",
+      "url": "https://us-store.msi.com/Motherboards"
+    },
+    {
+      "name": "INTEL PLATFORM",
+      "url": "https://us-store.msi.com/Motherboards/Intel-Platform-Motherboard"
+    },
+    {
+      "name": "Intel Z890",
+      "url": "https://us-store.msi.com/Motherboards/Intel-Platform-Motherboard/INTEL-Z890"
+    }
+  ],
+  "description": "Support Intel® Core™ Ultra Processors (Series 2) for LGA 1851 socketSupports DDR5 Memory, Dual Channel DDR5 9200+ MT/s (OC)Ultra Performance: 16+1+1+1 Duet Rail Power System 90A SPS, dual 8-pin CPU power connectors, Core Boost, Memory Boost, 6-layer PCB made by 2oz thickened copper and server-grade level materialFrozr Guard: Extended Heatsink, MOSFET thermal pads rated for 7W/mK, additional choke thermal pads and EZ M.2 Shield Frozr II are built for high performance system and non-stop experienceEZ DIY: EZ PCIe Release, EZ M.2 Shield Frozr II, EZ M.2 Clip II and EZ AntennaLightning Fast Game experience: PCIe 5.0 slot, Lightning Gen 5 x4 M.2Ultra Connect: Thunderbolt™ 4 port, Intel® Killer™ 5G LAN & Intel® Killer™ Wi-Fi 7 Solution - the latest solution for professional and multimedia use, delivering secure, stable, and high-speed networking and data transmissionAudio Boost 4: Reward your ears with studio grade sound quality for the most immersive gaming experience",
+  "price": 259.99,
+  "sale_price": null,
+  "availability": "in_stock",
+  "image_url": "https://asset-us-store.msi.com/image/cache/catalog/Pd_page/Motherboard/2024/Z890TOMAHAWKWIFI/Z890TOMAHAWKWIFI-1-1024x1024.png",
+  "additional_image_urls": [
+    "https://asset-us-store.msi.com/image/cache/catalog/Pd_page/Motherboard/PROZ790PWIFI/PROZ790PWIFI-1-200x200.png",
+    "https://asset-us-store.msi.com/image/cache/catalog/Pd_page/Motherboard/2024/PROZ890-PWIFI/Z890-PWIFI-0-200x200.png",
+    "https://asset-us-store.msi.com/image/cache/catalog/Pd_page/Motherboard/2024/Z890SWIFI/Z890SWIFI-1-200x200.png",
+    "https://asset-us-store.msi.com/image/cache/catalog/Pd_page/Motherboard/2025/B860GPLUSWIFI/B860GPLUSWIFI1-200x200.png",
+    "https://asset-us-store.msi.com/image/cache/catalog/Pd_page/Motherboard/2025/B860TOMAHAWKWIFI/B860TOMAHAWKWIFI1-200x200.png",
+    "https://asset-us-store.msi.com/image/cache/catalog/Pd_page/Motherboard/2025/B860PWIFI/B860PWIFI1-200x200.png",
+    "https://asset-us-store.msi.com/image/cache/catalog/Pd_page/Motherboard/2025/B860MAWIFI/B860MAWIFI1-200x200.png",
+    "https://asset-us-store.msi.com/image/cache/catalog/Pd_page/Motherboard/2025/B860MGPLUSWIFI/B860MGPLUSWIFI1-200x200.png",
+    "https://asset-us-store.msi.com/image/cache/catalog/Pd_page/Motherboard/2025/PROZ890-SWIFIW/Z890-SWIFIW-1-200x200.png",
+    "https://asset-us-store.msi.com/image/cache/catalog/Pd_page/Motherboard/2025/PROZ890-SWIFIPZ/PROZ890-SWIFIPZ-1-200x200.png",
+    "https://asset-us-store.msi.com/image/cache/catalog/Pd_page/Motherboard/2025/B860MMORTARWIFI/B860MMORTARWIFI-1-200x200.png",
+    "https://asset-us-store.msi.com/image/cache/catalog/Pd_page/Motherboard/2025/Z790AWIFIII/Z790AWIFIII-1-200x200.png",
+    "https://asset-us-store.msi.com/image/cache/catalog/Pd_page/Motherboard/2026/B860M-AWIFI6E/B860M-AWIFI6E-1-200x200.png"
+  ],
+  "specs": [
+    "OPERATING SYSTEM:Support for Windows® 11 64-bit",
+    "MANUFACTURER NUMBER:MAG Z890 TOMAHAWK WIFI",
+    "PRODUCT CONDITION:New",
+    "CPU:Supports Intel® Core™ Ultra Processors (Series 2) LGA 1851",
+    "CHIPSET:INTEL Z890 Chipset",
+    "CPU SOCKET:LGA 1851",
+    "FORM FACTOR:ATX Form Factor",
+    "MEMORY:4x DDR5 UDIMM, Maximum Memory Capacity 256GB Memory Support 9200 - 6400 (OC) MT/s / 6400 - 4800 (JEDEC) MT/s Max. overclocking frequency: 1DPC 1R Max speed up to 9200+ MT/s 1DPC 2R Max speed up to 7200+ MT/s 2DPC 1R Max speed up to 4800+ MT/s 2DPC 2R Max speed up to 4800+ MT/s Supports Intel® POR Speed and JEDEC Speed Supports Memory Overclocking and Intel® XMP 3.0 Supports Dual-Controller Dual-Channel mode Supports Non-ECC, Un-buffered memory Supports CUDIMM",
+    "LAN:Intel® Killer™ E5000 5Gbps LAN",
+    "WIRELESS LAN:Intel® Killer™ BE1750x Wi-Fi 7 The Wireless module is pre-installed in the M.2 (Key-E) slot Supports MU-MIMO TX/RX, 2.4GHz / 5GHz / 6GHz* (320MHz) up to 5.8Gbps Supports 802.11 a/ b/ g/ n/ ac/ ax/ be",
+    "BLUETOOTH:Supports Bluetooth® 5.4**, MLO, 4KQAM 6GHz band support may depend on every country’s regulations and Wi-Fi 7 will be ready in Windows 11 SV3. The Bluetooth version may be updated, please refer to the Wi-Fi chipset vendor's website for details. Bluetooth 5.4 support schedule depends on MSFT Windows 11 plan",
+    "AUDIO:Realtek® ALC1220P Codec 7.1-Channel High Definition Audio Supports S/PDIF output",
+    "STORAGE:4x M.2 M.2_1 Source (From CPU) supports up to PCIe 5.0 x4 , supports 2280/2260 devices M.2_2 Source (From CPU) supports up to PCIe 4.0 x4 , supports 22110/2280/2260 devices M.2_3 Source (From Chipset) supports up to PCIe 4.0 x4 , supports 2280/2260/2242 devices M.2_4 Source (From Chipset) supports up to PCIe 4.0 x4 / SATA mode, supports 2280/2260/2242 devices 4x SATA 6G Please refer to the manual for M.2 SSD heatsink restrictions",
+    "ONBOARD GRAPHICS:1x HDMI™ Support HDMI™ 2.1 with FRL, maximum resolution of 4K 120Hz 2x Type-C DisplayPort Thunderbolt™ 4 ports, supporting DisplayPort 1.4 over USB Type-C®, with a maximum resolution of 4K 120Hz / 8K 60Hz Available only on processors featuring integrated graphics. Graphics specifications may vary depending on the CPU installed",
+    "RAID:Supports RAID 0, RAID 1, RAID 5 and RAID 10 for SATA storage devices Supports RAID 0, RAID 1, RAID 5 and RAID 10 for M.2 NVMe storage devices",
+    "I/O (REAR):USB 10Gbps Type-A USB 5Gbps Type-A 5G LAN Wi-Fi / Bluetooth Audio Connectors HDMI™ Thunderbolt™ 4 40Gbps (Type-C) USB 10Gbps Type-C Flash BIOS Button Clear CMOS Button USB 5Gbps Type-A S/PDIF-OUT",
+    "EXPANSION SLOTS:3x PCI-E x16 slot PCI_E1 Gen PCIe 5.0 supports up to x16 (From CPU) PCI_E2 Gen PCIe 4.0 supports up to x4 (From Chipset) PCI_E3 Gen PCIe 4.0 supports up to x4 (From Chipset)",
+    "USB (FRONT):4x USB 2.0 2x USB 5Gbps Type A 1x USB 20Gbps Type C USB 20Gbps Type-C (Front) support USB PD 27W fast charging for JUSBC1",
+    "USB (REAR):4x USB 5Gbps Type A 3x USB 10Gbps Type A 1x USB 10Gbps Type C",
+    "TYPE-C PORT:1x USB 10Gbps Type C 1x USB 20Gbps Type C",
+    "INTERNAL CONNECTORS:1x Thunderbolt5 card connector(JTBT5, support RTD3) 1x Power Connector(ATX_PWR) 2x Power Connector(CPU_PWR) 1x Power Connector(PCIE_PWR 8pin) 1x CPU Fan 1x Combo Fan (Pump_Sys Fan) 6x System Fan 1x EZ Conn-header (JAF_2) 2x Front Panel (JFP) 1x Chassis Intrusion (JCI) 1x Front Audio (JAUD) 3x Addressable V2 RGB LED connector (JARGB_V2) 1x RGB LED connector(JRGB) 1x TPM pin header(Support TPM 2.0) 4x USB 2.0 ports 2x USB 5Gbps Type A ports 1x USB 20Gbps Type C ports",
+    "DIMENSIONS:12.00\" x 9.60\"",
+    "MANUFACTURER WARRANTY:3 Year"
+  ],
+  "star_rating": 4.7,
+  "review_count": 3,
+  "gtin": null,
+  "mpn": "MAG Z890 TOMAHAWK WIFI",
+  "scraped_at": "2026-08-04T13:34:44.279Z"
+}
