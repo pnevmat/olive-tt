@@ -4,6 +4,67 @@ const fs = require('fs/promises');
 const TARGET_URL =
   'https://us-store.msi.com/Motherboards/Intel-Platform-Motherboard/INTEL-Z890/MAG-Z890-TOMAHAWK-WIFI';
 
+// Створює контекст з повним маскуванням під реальний пристрій (емуляція Windows + Chrome)
+const handleCreateContext = async (browser) => {
+  const userAgent =
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+  const context = await browser.newContext({
+    // Передає User-Agent реального браузера БЕЗ слова "HeadlessChrome"
+    userAgent,
+    // Задає стандартне розширення дисплея (в headless режимі воно часто буває 0x0, що видає бота)
+    viewport: {width: 1920, height: 1080},
+    screen: {width: 1920, height: 1080},
+    deviceScaleFactor: 1, // Емулує стандартну щільність пікселів монітора
+    // Задає локалізацію та часовий пояс (для магазина MSI в США краще New York або Chicago)
+    locale: 'en-US',
+    timezoneId: 'America/New_York',
+    // Вставляє заголовки, які Cloudflare очікує побачити від реального Chrome 124
+    extraHTTPHeaders: {
+      Accept:
+        'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Sec-Ch-Ua':
+        '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Me-Brand";v="99"',
+      'Sec-Ch-Ua-Mobile': '?0',
+      'Sec-Ch-Ua-Platform': '"Windows"',
+      'Sec-Fetch-Dest': 'document',
+      'Sec-Fetch-Mode': 'navigate',
+      'Sec-Fetch-Site': 'cross-site', // Вказує, що ми прийшли зі стороннього сайту (з пошуку)
+      'Sec-Fetch-User': '?1',
+      'Upgrade-Insecure-Requests': '1', // Емулює, що ми перейшли на MSI за посиланням з пошуковика DuckDuckGo
+      Referer: 'https://duckduckgo.com',
+    },
+    // Дозволяє базові функції браузера
+    acceptDownloads: true,
+  });
+
+  // Скрипт очистки DOM-параметрів (виконується перед завантаженням будь-яких скриптів Cloudflare)
+  await context.addInitScript(() => {
+    // Вставляє скрипт, який прибирає флаг navigator.webdriver перед завантаженням сайту
+    Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+    // Імітує реальну відеокарту (Cloudflare перевіряє WebGL фейкових headless-відеокарт)
+    const getParameter = WebGLRenderingContext.prototype.getParameter;
+    WebGLRenderingContext.prototype.getParameter = function (parameter) {
+      if (parameter === 37445) return 'Intel Inc.'; // UNMASKED_VENDOR_WEBGL
+      if (parameter === 37446) return 'Intel(R) Iris(R) Xe Graphics'; // UNMASKED_RENDERER_WEBGL
+      return getParameter.apply(this, arguments);
+    };
+    // Налаштування мов та плагінів
+    Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+    Object.defineProperty(navigator, 'plugins', {
+      get: () => [
+        {
+          description: 'Portable Document Format',
+          filename: 'internal-pdf-viewer',
+          name: 'Chromium PDF Viewer',
+        },
+      ],
+    });
+  });
+
+  return context;
+};
+
 const handleCookieBanner = async (page) => {
   try {
     console.log('Cookie banner presence check...');
@@ -39,14 +100,61 @@ const handleCookieBanner = async (page) => {
 
 const start = async (TARGET_URL) => {
   try {
-    const browser = await chromium.launch({headless: false});
-    const page = await browser.newPage();
+    const browser = await chromium.launch({
+      headless: true,
+      args: [
+        '--disable-blink-features=AutomationControlled', // Приховує більшість флагів автоматизації в Chromium
+        '--disable-infobars', // Прибирає рядок "Браузером керує автоматизоване ПО"
+        '--disable-canvas-aa', // Маскує відбиток Canvas (Fingerprint)
+        '--disable-2d-canvas-clip-aa', // Додатковий захист Canvas
+        '--disable-gl-drawing-for-tests', // Приховує тестові сигнатури WebGL
+        '--no-sandbox',
+      ],
+    });
+
+    const context = await handleCreateContext(browser);
+    const page = await context.newPage();
     page.on('console', (msg) => {
       console.log(`[Browser] ${msg.text()}`);
     });
 
-    await page.goto(TARGET_URL);
-    await page.waitForURL('', {waitUntil: 'networkidle'});
+    await page.route('**/*', (route) => {
+      const url = route.request().url();
+      if (
+        url.includes('google-analytics') ||
+        url.includes('googletagmanager') ||
+        url.includes('go-mpulse.net') ||
+        url.includes('facebook') ||
+        url.includes('hotjar') ||
+        url.includes('tiktok')
+      ) {
+        return route.abort(); // Миттєво відміняє сміттєвий запит
+      }
+      return route.continue(); // Пропускає корисний контент сайту
+    });
+
+    console.log('Session heat emulation on DuckDuckGo...');
+    // Перед тим як йти на MSI, спочатку заходить на DuckDuckGo, щоб створити природні куки в контексті
+    await page.goto('https://duckduckgo.com?q=MSI+MAG+Z890+TOMAHAWK+WIFI', {
+      waitUntil: 'domcontentloaded',
+    });
+
+    await page.waitForTimeout(1500); // Коротка пауза людини
+
+    console.log('Going to target MSI page...');
+    // Переходить на MSI. Сервер побачить куки, реферер пошуковика та ідеальні заголовки Sec-Ch-Ua
+    const response = await page.goto(TARGET_URL, {
+      waitUntil: 'domcontentloaded',
+      timeout: 60000,
+    });
+
+    console.log(`Server response status: ${response.status()}`);
+
+    if (response.status() === 403) {
+      console.log('❌ Cloudflare continuing to block. Proxi rotation needed.');
+      return null;
+    }
+
     await handleCookieBanner(page);
 
     return {page, browser};
@@ -90,6 +198,7 @@ const getProductId = async (page, url) => {
 
       return metaId || dataId || inputId || skuId || null;
     });
+    console.log('Id from html: ', idFromHtml);
 
     if (idFromHtml) return String(idFromHtml);
 
@@ -100,10 +209,8 @@ const getProductId = async (page, url) => {
   }
 };
 
-const getProductTitle = async (page) => {
+const getProductTitle = async (page, url) => {
   try {
-    const url = page.url();
-
     // Забирає slug з URL (останній сегмент перед знаком питання)
     // '.../INTEL-Z890/MAG-Z890-TOMAHAWK-WIFI' -> 'MAG-Z890-TOMAHAWK-WIFI'
     const urlSegments = url.split('?')[0].split('/');
@@ -1609,7 +1716,7 @@ const getProductData = async (page, url) => {
     const productData = {
       url: page.url(),
       item_id: await getProductId(page, url),
-      title: await getProductTitle(page),
+      title: await getProductTitle(page, url),
       brand: await getBrandFromSiteMeta(page),
       product_category: await getProductCategory(page),
       category_tree: await getDetailedBreadcrumbs(page),
